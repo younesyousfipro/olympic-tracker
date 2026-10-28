@@ -6,12 +6,12 @@ The **Olympic Participation Tracker** is an application designed to record and a
 
 ## Technical Context
 
-The application is built using **Angular 14.1** and relies on **npm** for package management. Angular offers a powerful framework for creating dynamic web applications, and npm simplifies the process of managing dependencies and scripts.
+The application is built using **Angular 20** and relies on **npm** for package management. Angular offers a powerful framework for creating dynamic web applications, and npm simplifies the process of managing dependencies and scripts.
 
 Summary:
 
-- **NodeJS**: Tested with version 20.11.0
-- **NPM**: Tested with version 10.2.4
+- **NodeJS**: Tested with version 24 (Angular 20 requires Node 20.19+, 22.12+ or 24)
+- **NPM**: Tested with version 11
 - **NGINX**: Tested with version 1.27
 
 ## Getting Started
@@ -30,7 +30,7 @@ Run `ng serve` for a dev server. Navigate to `http://localhost:4200/`. The appli
 
 ### Build
 
-Run `npm run build` to build the project. The build artifacts will be stored in the `dist/` directory.
+Run `npm run build` to build the project. The build artifacts will be stored in the `dist/olympic-games-starter/browser/` directory.
 
 ### Test
 
@@ -56,7 +56,37 @@ This will create a distributable package containing the compiled code and necess
 
 To deploy application on nginx web server with docker you can use nginx config located in the `nginx` folder. This one configure the root application folder in the `/app` folder.
 
-After building the app copy the `dist/olympic-games-starter` folder to the root application folder in the docker image.
+After building the app copy the `dist/olympic-games-starter/browser` folder to the root application folder in the docker image.
+
+## Run with Docker
+
+The `Dockerfile` does both steps above in a multi-stage build: a `node:24-alpine` stage runs `npm ci` and `npm run build`, then a `nginx:1.27-alpine` stage only receives the nginx config and the built files. Tests are not run in the image (they need Chrome, see [Test](#test)).
+
+With Docker Compose (recommended):
+
+```bash
+docker compose up -d --build   # build the image and start the container
+docker compose ps              # wait for "(healthy)"
+```
+
+The application is available at http://localhost. Stop it with `docker compose down`.
+
+With plain Docker:
+
+```bash
+docker build -t olympic-tracker:local .
+docker run --rm -d -p 80:80 --name olympic-tracker olympic-tracker:local
+docker stop olympic-tracker
+```
+
+| | |
+|---|---|
+| Port | 80 (change the host side in `docker-compose.yml`, e.g. `"8080:80"`, if 80 is taken) |
+| Environment variables | none: data comes from `src/assets/mock/olympic.json`, bundled at build time |
+| Health check | `GET /` from inside the container, every 10 s |
+| Image size | ~76 MB (nginx + static files, no Node) |
+
+Design choices are recorded in [docs/decisions.md](docs/decisions.md).
 
 ### Publishing to GitLab Registry
 

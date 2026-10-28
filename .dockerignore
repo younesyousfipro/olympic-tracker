@@ -1,0 +1,15 @@
+# Generated or installed locally: rebuilt inside the image
+node_modules
+dist
+.angular
+coverage
+reports
+
+# Not needed to build the app
+.git
+.vscode
+k8s
+*.md
+Dockerfile
+.dockerignore
+docker-compose.yml

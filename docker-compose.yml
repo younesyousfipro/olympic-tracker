@@ -1,0 +1,12 @@
+services:
+  olympic-tracker:
+    build: .
+    image: olympic-tracker:local
+    ports:
+      - "80:80"
+    healthcheck:
+      # 127.0.0.1 rather than localhost: on Alpine localhost may resolve to ::1, and nginx only listens on IPv4
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
