@@ -133,3 +133,33 @@ To publish the application to a GitLab registry, follow these steps:
    npm publish
    ```
    This will publish the package to your GitLab registry.
+
+## CI/CD pipeline
+
+[`.gitlab-ci.yml`](.gitlab-ci.yml) runs on every branch push (branch pipelines only, so a merge request shows the status of its branch pipeline without running a second one). The same file is used in [workshop-api](https://gitlab.com/younesyousfipro-group/workshop-api): each job only runs in the repository whose project type it matches.
+
+| Stage | What it does |
+|---|---|
+| `test` | runs [`scripts/run-tests.sh`](scripts/run-tests.sh) in the job image; the JUnit report is shown in the pipeline's *Tests* tab, even when tests fail |
+
+Differences between the two projects:
+
+| | olympic-tracker | workshop-api |
+|---|---|---|
+| Job (selected by) | `test:npm` (`angular.json` exists) | `test:gradle` (`gradlew` exists) |
+| Job image | `node:24` + Chromium installed with `apt-get` (Karma runs Chrome headless) | `eclipse-temurin:21-jdk` |
+| Cache | `.npm/`, keyed on `package-lock.json` | `.gradle/wrapper` and `.gradle/caches`, keyed on `build.gradle` and the wrapper properties |
+| Tests | 5 (Jasmine/Karma) | 2 (JUnit, repositories mocked, no database) |
+| Duration, empty cache | ~1.5 min | ~1.5 min |
+
+The test stage uses no secret. To reproduce the job locally in the same image:
+
+```bash
+docker run --rm -v "$PWD":/src:ro node:24 bash -c '
+  git config --global --add safe.directory "*"
+  git clone -q /src /app && cd /app
+  apt-get update -qq && apt-get install -y -qq --no-install-recommends chromium >/dev/null
+  CHROME_BIN=/usr/bin/chromium ./scripts/run-tests.sh'
+```
+
+Design choices are recorded in [docs/decisions.md](docs/decisions.md).
