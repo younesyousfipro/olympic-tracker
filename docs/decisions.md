@@ -19,9 +19,18 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | Build image `node:24-alpine` | Node 20.11 (README), Node 20, Node 22 | Angular 20 requires Node 20.19+; Node 20 is end-of-life since April 2026; Node 24 is the latest LTS and the version tested locally |
 | Runtime image `nginx:1.27-alpine` | `nginx:latest`, Debian-based image | version tested by the README; fixed minor version for reproducible builds; Alpine is smaller |
 | Floating tags (`24-alpine`, `1.27-alpine`) | exact version or digest | security patches are picked up automatically; pinning can come with the release pipeline if needed |
-| Client's `nginx/nginx.conf` used as is | custom config | it already serves `/app` with the `try_files` fallback a single-page app needs |
-| Official nginx image (runs as root) | `nginx-unprivileged` (non-root) | simplest option that meets the requirement. Possible improvement: the client's config already puts the PID and temp files in `/tmp`, so switching to non-root is cheap |
+| Client's `nginx/nginx.conf` used as is | custom config | it already serves `/app` with the `try_files` fallback a single-page app needs. **Port changed on 2026-10-30, see below** |
+| Official nginx image (runs as root) | `nginx-unprivileged` (non-root) | simplest option that meets the requirement. Possible improvement: the client's config already puts the PID and temp files in `/tmp`, so switching to non-root is cheap. **Superseded on 2026-10-30, see below** |
 | Tests not run in the image | `npm test` in the build stage | Karma needs Chrome, which the Alpine image lacks; tests get their own CI job |
 | `.dockerignore` excludes generated files and files not needed to build | no `.dockerignore` | smaller build context; a macOS `node_modules` must never overwrite the Linux one; editing the README does not invalidate the build cache |
-| Health check in Compose: `wget --spider http://127.0.0.1/` | no health check; `curl`; `localhost` | `docker compose ps` shows the real state of the app; `wget` ships with Alpine (BusyBox), `curl` does not; on Alpine `localhost` may resolve to `::1` while nginx only listens on IPv4 |
+| Health check in Compose: `wget --spider http://127.0.0.1/` | no health check; `curl`; `localhost` | `docker compose ps` shows the real state of the app; `wget` ships with Alpine (BusyBox), `curl` does not; on Alpine `localhost` may resolve to `::1` while nginx only listens on IPv4. **Port 8080 since 2026-10-30** |
 | Karma JUnit reports (`reports/`) ignored by git | committing them | generated output; the CI will publish them as artifacts |
+
+## Non-root container (2026-10-30)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| Runtime image `nginxinc/nginx-unprivileged:1.27-alpine` (user `nginx`, uid 101) | official `nginx` image as root; official image + `USER nginx` | a compromised nginx no longer runs as root; same as the back-end image; image maintained by the nginx team for this purpose; same nginx version, so only one thing changes |
+| nginx listens on 8080 (client's `nginx/nginx.conf` edited: `listen 80` → `listen 8080`) | keep 80 | a non-root process cannot bind a port below 1024 in Kubernetes. One-line change in the client's config, which already puts the PID and temp files in `/tmp` |
+| Host port unchanged: Compose publishes `80:8080` | `8080:8080` | the application stays at http://localhost |
+| Done before the first release | after the CI pipeline | the container port is part of the image contract: changing it after a release would be a breaking change |
