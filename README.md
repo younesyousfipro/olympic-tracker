@@ -60,7 +60,7 @@ After building the app copy the `dist/olympic-games-starter/browser` folder to t
 
 ## Run with Docker
 
-The `Dockerfile` does both steps above in a multi-stage build: a `node:24-alpine` stage runs `npm ci` and `npm run build`, then a `nginx:1.27-alpine` stage only receives the nginx config and the built files. Tests are not run in the image (they need Chrome, see [Test](#test)).
+The `Dockerfile` does both steps above in a multi-stage build: a `node:24-alpine` stage runs `npm ci` and `npm run build`, then a `nginxinc/nginx-unprivileged:1.27-alpine` stage (nginx running as a non-root user) only receives the nginx config and the built files. Tests are not run in the image (they need Chrome, see [Test](#test)).
 
 With Docker Compose (recommended):
 
@@ -75,13 +75,14 @@ With plain Docker:
 
 ```bash
 docker build -t olympic-tracker:local .
-docker run --rm -d -p 80:80 --name olympic-tracker olympic-tracker:local
+docker run --rm -d -p 80:8080 --name olympic-tracker olympic-tracker:local
 docker stop olympic-tracker
 ```
 
 | | |
 |---|---|
-| Port | 80 (change the host side in `docker-compose.yml`, e.g. `"8080:80"`, if 80 is taken) |
+| Port | nginx listens on 8080 in the container, published on 80 on the host (change the host side in `docker-compose.yml`, e.g. `"8081:8080"`, if 80 is taken) |
+| User | `nginx` (uid 101), not root: limits the impact if nginx is compromised. Check with `docker compose exec olympic-tracker id` |
 | Environment variables | none: data comes from `src/assets/mock/olympic.json`, bundled at build time |
 | Health check | `GET /` from inside the container, every 10 s |
 | Image size | ~76 MB (nginx + static files, no Node) |
