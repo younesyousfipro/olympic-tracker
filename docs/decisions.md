@@ -35,3 +35,15 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | nginx listens on 8080 (client's `nginx/nginx.conf` edited: `listen 80` → `listen 8080`) | keep 80 | a non-root process cannot bind a port below 1024 in Kubernetes. One-line change in the client's config, which already puts the PID and temp files in `/tmp` |
 | Host port unchanged: Compose publishes `80:8080` | `8080:8080` | the application stays at http://localhost |
 | Done before the first release | after the CI pipeline | the container port is part of the image contract: changing it after a release would be a breaking change |
+
+## Test script (2026-10-30)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| Bash script `scripts/run-tests.sh` | Python | the script only chains commands; Bash is in every Debian-based CI image, Python is not guaranteed. Consequence: the CI image must provide Bash (not the case of Alpine images by default) |
+| Same file in both repositories, project type detected from marker files (`package.json` + `angular.json`, or `gradlew`) | one script per repository; shared `ci-templates` project | one behaviour for both apps, and each repository stays self-contained. A shared project remains possible (question for the mentor) |
+| Reports collected into `test-results/` | changing the output folder in `karma.conf.js` | client configuration untouched; the CI only needs one report path for both apps |
+| Reports collected even when tests fail; the run fails if no report is found | stop at the first failure | GitLab needs the report to show which test failed; a run without a report means no test was checked |
+| Exit code of the test tool passed through; `2` when the tests could not run | always `1` | tells "the code is broken" from "the environment is broken"; keeps tool-specific codes (e.g. 137 = killed, out of memory) |
+| `npm ci` when `node_modules` is missing | `npm install` | installs the exact versions of `package-lock.json`, as the README recommends for CI |
+| `test-results/` ignored by git | — | generated output, published by the CI |

@@ -42,6 +42,22 @@ npm test
 
 Our test suite covers critical components, ensuring stability and reliability.
 
+#### Unified test script
+
+`scripts/run-tests.sh` runs the tests the same way locally and in CI. The same script is used in [workshop-api](https://gitlab.com/younesyousfipro-group/workshop-api): it detects the project type, then here installs the dependencies if `node_modules` is missing (`npm ci`), runs `npm test` and copies the JUnit XML report into `test-results/`.
+
+```bash
+./scripts/run-tests.sh
+```
+
+| Exit code | Meaning |
+|---|---|
+| `0` | tests passed |
+| other, usually `1` (passed through from npm) | tests failed, the report is in `test-results/` |
+| `2` | tests could not run: missing tool, failed install or no report produced |
+
+Requires Bash, Node, npm and Chrome (Karma runs Chrome headless).
+
 ### Packaging
 
 To package the application for distribution, run:
