@@ -141,6 +141,7 @@ To publish the application to a GitLab registry, follow these steps:
 | Stage | What it does |
 |---|---|
 | `test` | runs [`scripts/run-tests.sh`](scripts/run-tests.sh) in the job image; the JUnit report is shown in the pipeline's *Tests* tab, even when tests fail |
+| `build` | once tests pass, builds the `Dockerfile` with Docker-in-Docker and pushes the image to the GitLab Container Registry (see [Container images](#container-images)) |
 
 Differences between the two projects:
 
@@ -150,9 +151,11 @@ Differences between the two projects:
 | Job image | `node:24` + Chromium installed with `apt-get` (Karma runs Chrome headless) | `eclipse-temurin:21-jdk` |
 | Cache | `.npm/`, keyed on `package-lock.json` | `.gradle/wrapper` and `.gradle/caches`, keyed on `build.gradle` and the wrapper properties |
 | Tests | 5 (Jasmine/Karma) | 2 (JUnit, repositories mocked, no database) |
-| Duration, empty cache | ~1.5 min | ~1.5 min |
+| Test job duration, empty cache | ~1.5 min | ~1.5 min |
+| Build job | same `build` job; only the `Dockerfile` differs (Node build + nginx runtime) | same `build` job; only the `Dockerfile` differs (Gradle build + JRE runtime) |
+| Pipeline duration (test + build) | ~2.5 min | ~4 min |
 
-The test stage uses no secret. To reproduce the job locally in the same image:
+No secret to configure: the build job logs in to the registry with the credentials GitLab gives each job, which expire with it. To reproduce the test job locally in the same image:
 
 ```bash
 docker run --rm -v "$PWD":/src:ro node:24 bash -c '
@@ -161,5 +164,26 @@ docker run --rm -v "$PWD":/src:ro node:24 bash -c '
   apt-get update -qq && apt-get install -y -qq --no-install-recommends chromium >/dev/null
   CHROME_BIN=/usr/bin/chromium ./scripts/run-tests.sh'
 ```
+
+### Container images
+
+The `build` job pushes the image to the project's Container Registry (*Deploy → Container registry*), `registry.gitlab.com/younesyousfipro-group/olympic-tracker`, with two tags:
+
+| Tag | Example | Moves | Use |
+|---|---|---|---|
+| commit SHA (`$CI_COMMIT_SHORT_SHA`) | `:a1b2c3d4` | never | know exactly which code runs; roll back |
+| branch slug (`$CI_COMMIT_REF_SLUG`) | `:main` | to the latest build of the branch | get the latest build of a branch |
+
+Run the image of a branch locally (public project, no login needed):
+
+```bash
+docker run --rm -p 80:8080 registry.gitlab.com/younesyousfipro-group/olympic-tracker:main
+```
+
+The application is available at http://localhost.
+
+Images are built for `linux/amd64` (GitLab.com runners): on an Apple Silicon Mac, Docker Desktop runs them with emulation and prints a "platform does not match" warning.
+
+The pipeline publishes a container image, not the npm package described in [Publishing to GitLab Registry](#publishing-to-gitlab-registry).
 
 Design choices are recorded in [docs/decisions.md](docs/decisions.md).
