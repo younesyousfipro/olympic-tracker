@@ -326,3 +326,84 @@ unset GITLAB_TOKEN
 ### Why the version is committed
 
 semantic-release recommends keeping the version in git tags only and not committing during a release. The instructions of this project require the version to be synchronized in the project files, so the version files and `CHANGELOG.md` are committed by `@semantic-release/git`. The cost: a token allowed to push to `main`, a `workflow:rules` exception for the release commit, and a pull after each release. See [docs/decisions.md](docs/decisions.md).
+
+## Run on Kubernetes (Minikube)
+
+The [`k8s/`](k8s/) manifests deploy the released image from the registry: a Deployment (1 Pod) and a `LoadBalancer` Service. Tested with Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
+
+| | |
+|---|---|
+| Image | `registry.gitlab.com/younesyousfipro-group/olympic-tracker:0.1.4` (released version) |
+| Ports | Service `80` → container `8080` (nginx runs as non-root) |
+| Readiness probe | `GET /` on 8080: the Pod gets traffic only once nginx answers |
+| Pull secret | `olympic-tracker-registry`, created by hand (below), never committed |
+| Environment variables, volumes | none |
+
+Differences between the two projects:
+
+| | olympic-tracker | workshop-api |
+|---|---|---|
+| Manifests | 2: Deployment + `LoadBalancer` Service | 6: Secret, PVC, Deployment + headless Service (PostgreSQL), Deployment + `LoadBalancer` Service (API) |
+| Images | `olympic-tracker:0.1.4` | `workshop-api:0.2.5` + `postgres:13` (Docker Hub, no pull secret) |
+| Service → container port | 80 → 8080 | 8080 → 8080 |
+| Configuration | none (static files, data inside the image) | database URL, username and password as environment variables |
+| Secrets | pull secret only (created by hand) | pull secret (created by hand) + database Secret (committed, sandbox value) |
+| Readiness probe | `GET /` | API: `GET /api/notions`; database: `pg_isready` |
+| State | stateless: deleting the Pod loses nothing | PVC: data survives the Pod; `strategy: Recreate` |
+| Start order | — | none: the API restarts until the database is ready |
+| `kubectl delete -f k8s/` | nothing lost | also deletes the PVC, so the data |
+
+### 1. Registry credentials (once per cluster and namespace)
+
+The project is public, so the image can be pulled anonymously; the manifests still use a pull secret, as a private registry would require.
+
+1. On GitLab: *Settings → Repository → Deploy tokens → Add token*, scope **`read_registry`** only, with an expiration date. Keep the username and token (shown once) in a password manager.
+2. Create the Secret (the token is typed without echo and stays out of the shell history):
+
+   ```bash
+   kubectl config current-context      # must be minikube
+   read -rs TOKEN
+   kubectl create secret docker-registry olympic-tracker-registry \
+     --docker-server=registry.gitlab.com \
+     --docker-username=<deploy token username> \
+     --docker-password="$TOKEN"
+   unset TOKEN
+   ```
+
+The kubelet (not the container) uses this Secret to pull the image. When the token expires, the Pod fails with `ErrImagePull`.
+
+### 2. Deploy and check
+
+```bash
+minikube start
+kubectl apply -f k8s/
+kubectl get pods                       # 1/1 Running
+kubectl get endpointslices -l kubernetes.io/service-name=olympic-games-app-service   # the Pod IP, port 8080
+```
+
+### 3. Open the application
+
+```bash
+minikube service olympic-games-app-service --url
+```
+
+The command prints `http://127.0.0.1:<port>` and must stay open: with the Docker driver on macOS, the node IP is not reachable and this command holds a tunnel to the Service.
+
+### 4. Remove
+
+```bash
+kubectl delete -f k8s/
+kubectl delete secret olympic-tracker-registry
+```
+
+### Troubleshooting
+
+| Symptom | Likely cause | Look at |
+|---|---|---|
+| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, Secret missing or token expired | `kubectl describe pod -l app=olympic-games-app` (Events) |
+| `Running` but `0/1` | readiness probe failing | `kubectl describe pod`, `kubectl logs` |
+| page does not load, Pod `1/1` | Service selector does not match the Pod labels (no endpoints) | `kubectl get endpointslices`, `kubectl get pods --show-labels` |
+
+With a fixed tag the node keeps the image and does not pull it again, so the pull secret is not used. To test it, remove the image from the node first: `minikube image rm registry.gitlab.com/younesyousfipro-group/olympic-tracker:0.1.4`.
+
+Design choices are recorded in [docs/decisions.md](docs/decisions.md#kubernetes-manifests-2026-11-02).

@@ -14,7 +14,14 @@ spec:
     spec:
       containers:
       - name: olympic-games-app
-        # TODO: add the image of the application from the gitlab registry
+        image: registry.gitlab.com/younesyousfipro-group/olympic-tracker:0.1.4
         ports:
-        - containerPort: 80
-      # TODO: define imagePullSecrets to use a docker-registry secret and authorize Kubenetes 
+        # nginx listens on 8080 since the non-root image (see docs/decisions.md)
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+      # Created with kubectl from a read_registry deploy token, never committed
+      imagePullSecrets:
+      - name: olympic-tracker-registry

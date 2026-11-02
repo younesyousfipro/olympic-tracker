@@ -10,7 +10,7 @@ DevOps decisions for this repository, recorded when they are made. The applicati
 | GitLab is the source of truth; GitHub is a read-only push mirror | manual double push, CI on GitHub | a single CI, no manual sync |
 | Work on a branch, merge into `main` through a merge request | commits on `main` | the pipeline is tested on a branch before merging |
 | Repository docs in English (2026-10-28) | French | same language as the client's README |
-| Public GitLab group and projects (2026-10-30) | private (initial choice, 2026-10-24) | recommended by the mentor; the code is already public on the GitHub mirror; Kubernetes pulls images without registry credentials. Consequence: pipeline logs are public, so secrets are masked and protected CI/CD variables, never printed |
+| Public GitLab group and projects (2026-10-30) | private (initial choice, 2026-10-24) | recommended by the mentor; the code is already public on the GitHub mirror; Kubernetes could pull images without registry credentials (a pull secret is configured anyway, see [Kubernetes manifests](#kubernetes-manifests-2026-11-02)). Consequence: pipeline logs are public, so secrets are masked and protected CI/CD variables, never printed |
 
 ## Containerization (2026-10-28)
 
@@ -116,3 +116,16 @@ The first release (0.1.4) was published, but its tag pipeline was skipped and no
 | GitLab **cleanup policy**, weekly: keep `main`, every version tag (`(?:main\|\d+\.\d+\.\d+)`) and the 10 most recent tags; remove the other tags (`.*`) older than 30 days | no cleanup; a cleanup job in the pipeline | every push adds a SHA-tagged image that nothing removes. The policy is a built-in setting, no code or CI minutes. Released versions are never removed (keep rules win over remove rules) |
 | Pattern written as a group without `^`/`$` | `^(main\|…)$` | GitLab wraps the pattern in `\A…\Z` itself; the group keeps both anchors on every alternative |
 | One-time manual cleanup: all images from the setup and test pipelines deleted, only two kept (`main` + `a34efe70`, `0.1.4` + `f42f579f`) | waiting for the policy | the policy only removes tags older than 30 days; the setup images have no use. A registry deletes images through their tags: an image is removed once no tag points to it |
+
+## Kubernetes manifests (2026-11-02)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| No multi-arch image: the `linux/amd64` images run on Minikube on an Apple Silicon Mac | multi-arch build in CI (`FROM --platform=$BUILDPLATFORM` + buildx) | tested on 2026-11-02: Docker Desktop registers amd64 emulation (Rosetta) in the kernel of its VM, which the Minikube node shares. A multi-arch build would cost a merge request and CI minutes for no gain here |
+| Image pinned to a released version (`:0.1.4`) | `:main`, a commit SHA | reproducible deployment of a released version; `:main` moves with every merge. Choosing the tag per environment comes with Helm |
+| `imagePullSecrets` with a project **deploy token** (`read_registry`); Secret `olympic-tracker-registry` created with `kubectl`, never committed | no pull secret (the registry is public); the personal token used by semantic-release; one group deploy token shared by both apps | the client's TODO, and ready for a private registry. A deploy token can only read this project's images; one Secret per app keeps the two apps independent (no shared object to create first) |
+| `containerPort` and `targetPort` 8080; Service `port` 80 kept | 80 everywhere (client's manifests) | nginx listens on 8080 since the non-root image; the Service translates 80 → 8080 |
+| Readiness probe `GET /` on 8080, default timings | no probe; a liveness probe; a `/healthz` location | not in the TODOs: without a probe, a Pod gets traffic as soon as its process starts. `/` proves that nginx answers and the built files are there, without editing the client's nginx config. A liveness probe adds nothing for a static nginx |
+| Client's names, labels and `LoadBalancer` Service kept; access with `minikube service --url` | `NodePort`; `minikube tunnel` | no change beyond the TODOs. With the Docker driver on macOS the node IP is not reachable; `minikube service` opens a tunnel without `sudo` |
+| No `resources` (requests/limits) yet | adding them now | they go to `values.yaml` with the Helm chart |
+| Commit type `chore:` for manifests | `build:`, `feat:` | the image does not change: a release would publish an identical version |
