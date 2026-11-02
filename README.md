@@ -339,6 +339,20 @@ The [`k8s/`](k8s/) manifests deploy the released image from the registry: a Depl
 | Pull secret | `olympic-tracker-registry`, created by hand (below), never committed |
 | Environment variables, volumes | none |
 
+Differences between the two projects:
+
+| | olympic-tracker | workshop-api |
+|---|---|---|
+| Manifests | 2: Deployment + `LoadBalancer` Service | 6: Secret, PVC, Deployment + headless Service (PostgreSQL), Deployment + `LoadBalancer` Service (API) |
+| Images | `olympic-tracker:0.1.4` | `workshop-api:0.2.5` + `postgres:13` (Docker Hub, no pull secret) |
+| Service → container port | 80 → 8080 | 8080 → 8080 |
+| Configuration | none (static files, data inside the image) | database URL, username and password as environment variables |
+| Secrets | pull secret only (created by hand) | pull secret (created by hand) + database Secret (committed, sandbox value) |
+| Readiness probe | `GET /` | API: `GET /api/notions`; database: `pg_isready` |
+| State | stateless: deleting the Pod loses nothing | PVC: data survives the Pod; `strategy: Recreate` |
+| Start order | — | none: the API restarts until the database is ready |
+| `kubectl delete -f k8s/` | nothing lost | also deletes the PVC, so the data |
+
 ### 1. Registry credentials (once per cluster and namespace)
 
 The project is public, so the image can be pulled anonymously; the manifests still use a pull secret, as a private registry would require.
