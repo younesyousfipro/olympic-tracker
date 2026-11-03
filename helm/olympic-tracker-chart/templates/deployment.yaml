@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-deployment
+spec:
+  replicas: {{ .Values.app.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+      - name: olympic-games-app
+        image: "{{ .Values.app.image }}:{{ .Values.app.tag | default .Chart.AppVersion }}"
+        ports:
+        - containerPort: {{ .Values.app.port }}
+        readinessProbe:
+          httpGet:
+            path: /
+            port: {{ .Values.app.port }}
+        resources:
+          {{- toYaml .Values.app.resources | nindent 10 }}
+      {{- with .Values.app.imagePullSecret }}
+      imagePullSecrets:
+      - name: {{ . }}
+      {{- end }}
