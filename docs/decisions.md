@@ -129,3 +129,20 @@ The first release (0.1.4) was published, but its tag pipeline was skipped and no
 | Client's names, labels and `LoadBalancer` Service kept; access with `minikube service --url` | `NodePort`; `minikube tunnel` | no change beyond the TODOs. With the Docker driver on macOS the node IP is not reachable; `minikube service` opens a tunnel without `sudo` |
 | No `resources` (requests/limits) yet | adding them now | they go to `values.yaml` with the Helm chart |
 | Commit type `chore:` for manifests | `build:`, `feat:` | the image does not change: a release would publish an identical version |
+
+The `k8s/` manifests were replaced by the Helm chart on 2026-11-04 (next section); the decisions above still apply to its templates.
+
+## Helm chart (2026-11-04)
+
+| Decision | Rejected | Reason |
+|---|---|---|
+| One chart, `helm/olympic-tracker-chart/`, started from `helm create`; kept `Chart.yaml`, `values.yaml`, `.helmignore` and the two templates, filled with the `k8s/` manifests | the full skeleton (Ingress, HTTPRoute, HPA, ServiceAccount, `NOTES.txt`, test Pod) | the instructions ask to migrate the manifests and not to over-parameterize; none of these objects is used here |
+| No `_helpers.tpl`: names and the `app` label built from `{{ .Release.Name }}` | the skeleton's helpers (full name, standard labels) | same uniqueness with two templates, readable without jumping to another file. The label matters most: two releases in one namespace do not select each other's Pods. Can be added back if repetition grows |
+| Values under `app:`, as in the client's `values.tpl.yaml`: `replicas`, `image`, `tag`, `port`, `imagePullSecret`, `resources` | the skeleton's values (about 60 keys) | the list asked by the instructions. `image` and `tag` split: per environment only the tag changes |
+| One `port` value for `containerPort`, probe port and `targetPort`; Service `port` 80 and type `LoadBalancer` fixed | a value for every port and the Service type | the container-side values must be equal; no environment changes the Service side |
+| `imagePullSecret` optional (`with`): empty = no `imagePullSecrets` block | always rendered | a cluster pulling from a public registry needs no Secret |
+| `resources`: requests `50m` / `32Mi`, limits `200m` / `64Mi` | none (as in `k8s/`) | without requests the scheduler reserves nothing. Estimates for a static nginx, not measured |
+| Chart `version` bumped by hand; `appVersion` is the default image tag (`tag: ""` → `appVersion`), written by `set-version.sh` at each release and committed by `@semantic-release/git` | tag in `values.yaml` and `appVersion` kept in sync by hand; semantic-release on the chart `version` | one source for the deployed version, which follows the releases without manual step. The chart is not published, so its version is only a marker; chart commits are `chore:` and would not move it anyway |
+| `set-version.sh` requires exactly one `helm/*/Chart.yaml` and fails if `appVersion` is not updated | skip silently when no chart is found | same rule as for the project file: fail rather than release with a stale version |
+| `k8s/` and `values.tpl.yaml` removed | keeping them next to the chart | the chart renders the same objects (checked with `diff`, only names, comments and `resources` differ); two descriptions of one deployment drift apart. Both stay in the git history |
+| Commit types: chart and docs `chore:`/`docs:`, release script `ci:` | `build:`, `feat:` | the image does not change: a release would publish an identical version |
