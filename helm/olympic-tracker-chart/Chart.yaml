@@ -1,0 +1,8 @@
+apiVersion: v2
+name: olympic-tracker-chart
+description: Olympic Tracker front-end (Angular app served by nginx)
+type: application
+# !!! IMPORTANT:Chart version, UPDATE manually when templates or values change !!!
+version: 0.1.0
+# Default image tag; app.tag in values overrides it
+appVersion: "0.1.4"

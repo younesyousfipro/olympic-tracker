@@ -262,10 +262,10 @@ Results: *Deploy → Releases* (notes per version), *Code → Tags*, [`CHANGELOG
 | notes | `@semantic-release/release-notes-generator` | release notes; only the types that trigger a version are listed (Features, Bug Fixes, Performance Improvements, Build System) |
 | prepare | `@semantic-release/changelog` | adds the notes to `CHANGELOG.md` |
 | prepare | `@semantic-release/exec` | runs [`scripts/set-version.sh`](scripts/set-version.sh) `X.Y.Z` |
-| prepare | `@semantic-release/git` | commits `CHANGELOG.md` and the version files (missing files are skipped, so the list covers both repositories) |
+| prepare | `@semantic-release/git` | commits `CHANGELOG.md`, the version files and the chart's `Chart.yaml` (missing files are skipped, so the list covers both repositories) |
 | publish | `@semantic-release/gitlab` | creates the GitLab release; comments on the merge requests it includes, opens an issue if the release fails |
 
-`scripts/set-version.sh X.Y.Z` writes the version into the project file. It detects the project type like `run-tests.sh` and fails (exit code 2) if the file does not show the new version afterwards. It does not depend on semantic-release and can be run by hand.
+`scripts/set-version.sh X.Y.Z` writes the version into the project file and into the `appVersion` of `helm/*/Chart.yaml` (the chart's default image tag). It detects the project type like `run-tests.sh` and fails (exit code 2) if a file does not show the new version afterwards. It does not depend on semantic-release and can be run by hand.
 
 The plugin versions are pinned in the release job (`npm install -g` in a `node:24` image), not in `package.json`: semantic-release is a CI tool here, not a dependency of the application. The job clones the full history (`GIT_DEPTH: 0`): with GitLab's default shallow clone (20 commits), the last version tag can be missing and semantic-release would release `1.0.0`.
 
@@ -327,35 +327,46 @@ unset GITLAB_TOKEN
 
 semantic-release recommends keeping the version in git tags only and not committing during a release. The instructions of this project require the version to be synchronized in the project files, so the version files and `CHANGELOG.md` are committed by `@semantic-release/git`. The cost: a token allowed to push to `main`, a `workflow:rules` exception for the release commit, and a pull after each release. See [docs/decisions.md](docs/decisions.md).
 
-## Run on Kubernetes (Minikube)
+## Deploy with Helm (Minikube)
 
-The [`k8s/`](k8s/) manifests deploy the released image from the registry: a Deployment (1 Pod) and a `LoadBalancer` Service. Tested with Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
+The chart [`helm/olympic-tracker-chart/`](helm/olympic-tracker-chart/) deploys the released image from the registry: a Deployment (1 Pod) and a `LoadBalancer` Service. Tested with Helm 4.3, Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
 
-| | |
+| File | Content |
 |---|---|
-| Image | `registry.gitlab.com/younesyousfipro-group/olympic-tracker:0.1.4` (released version) |
-| Ports | Service `80` → container `8080` (nginx runs as non-root) |
-| Readiness probe | `GET /` on 8080: the Pod gets traffic only once nginx answers |
-| Pull secret | `olympic-tracker-registry`, created by hand (below), never committed |
-| Environment variables, volumes | none |
+| `Chart.yaml` | chart name, chart `version` (bumped by hand when the chart changes), `appVersion` (the default image tag, written by `set-version.sh` at each release) |
+| `values.yaml` | default values, all under `app:` |
+| `templates/` | `deployment.yaml`, `service.yaml` |
+
+Values:
+
+| Key | Default | Used for |
+|---|---|---|
+| `app.replicas` | `1` | Deployment `replicas` |
+| `app.image` | `registry.gitlab.com/younesyousfipro-group/olympic-tracker` | image name, without tag |
+| `app.tag` | `""` | image tag; empty = `appVersion` from `Chart.yaml` |
+| `app.port` | `8080` | `containerPort`, readiness probe and Service `targetPort` (nginx runs as non-root) |
+| `app.imagePullSecret` | `olympic-tracker-registry` | pull secret name; empty = no `imagePullSecrets` |
+| `app.resources` | requests `50m` / `32Mi`, limits `200m` / `64Mi` | container `resources` |
+
+Fixed in the templates: Service `port` 80 and type `LoadBalancer`; readiness probe `GET /`. Object names and the `app` label come from the release name (`<release>-deployment`, `<release>-service`), so two releases do not select each other's Pods. No environment variables, no volumes.
 
 Differences between the two projects:
 
 | | olympic-tracker | workshop-api |
 |---|---|---|
-| Manifests | 2: Deployment + `LoadBalancer` Service | 6: Secret, PVC, Deployment + headless Service (PostgreSQL), Deployment + `LoadBalancer` Service (API) |
-| Images | `olympic-tracker:0.1.4` | `workshop-api:0.2.5` + `postgres:13` (Docker Hub, no pull secret) |
+| Kubernetes objects | 2: Deployment + `LoadBalancer` Service | 6: Secret, PVC, Deployment + headless Service (PostgreSQL), Deployment + `LoadBalancer` Service (API) |
+| Images | `olympic-tracker` | `workshop-api` + `postgres:13` (Docker Hub, no pull secret) |
 | Service → container port | 80 → 8080 | 8080 → 8080 |
 | Configuration | none (static files, data inside the image) | database URL, username and password as environment variables |
-| Secrets | pull secret only (created by hand) | pull secret (created by hand) + database Secret (committed, sandbox value) |
+| Secrets | pull secret only (created by hand) | pull secret (created by hand) + database Secret |
 | Readiness probe | `GET /` | API: `GET /api/notions`; database: `pg_isready` |
 | State | stateless: deleting the Pod loses nothing | PVC: data survives the Pod; `strategy: Recreate` |
 | Start order | — | none: the API restarts until the database is ready |
-| `kubectl delete -f k8s/` | nothing lost | also deletes the PVC, so the data |
+| Uninstall | nothing lost | also deletes the PVC, so the data |
 
 ### 1. Registry credentials (once per cluster and namespace)
 
-The project is public, so the image can be pulled anonymously; the manifests still use a pull secret, as a private registry would require.
+The project is public, so the image can be pulled anonymously; the chart still uses a pull secret, as a private registry would require.
 
 1. On GitLab: *Settings → Repository → Deploy tokens → Add token*, scope **`read_registry`** only, with an expiration date. Keep the username and token (shown once) in a password manager.
 2. Create the Secret (the token is typed without echo and stays out of the shell history):
@@ -372,27 +383,40 @@ The project is public, so the image can be pulled anonymously; the manifests sti
 
 The kubelet (not the container) uses this Secret to pull the image. When the token expires, the Pod fails with `ErrImagePull`.
 
-### 2. Deploy and check
+### 2. Check the chart
 
 ```bash
+helm lint --strict helm/olympic-tracker-chart
+helm template olympic-tracker helm/olympic-tracker-chart          # rendered YAML, no cluster needed
 minikube start
-kubectl apply -f k8s/
-kubectl get pods                       # 1/1 Running
-kubectl get endpointslices -l kubernetes.io/service-name=olympic-games-app-service   # the Pod IP, port 8080
+helm install olympic-tracker helm/olympic-tracker-chart --dry-run=server   # validated by the API server, nothing created
 ```
 
-### 3. Open the application
+`lint` checks the chart structure and the template syntax, not the Kubernetes fields: the server dry run does.
+
+### 3. Install and check
 
 ```bash
-minikube service olympic-games-app-service --url
+helm install olympic-tracker helm/olympic-tracker-chart
+helm list                              # olympic-tracker, deployed, app version 0.1.4
+kubectl get pods                       # 1/1 Running
+kubectl get endpointslices -l kubernetes.io/service-name=olympic-tracker-service   # the Pod IP, port 8080
+```
+
+Helm records each release revision in a Secret of the namespace (`sh.helm.release.v1.olympic-tracker.v1`).
+
+### 4. Open the application
+
+```bash
+minikube service olympic-tracker-service --url
 ```
 
 The command prints `http://127.0.0.1:<port>` and must stay open: with the Docker driver on macOS, the node IP is not reachable and this command holds a tunnel to the Service.
 
-### 4. Remove
+### 5. Remove
 
 ```bash
-kubectl delete -f k8s/
+helm uninstall olympic-tracker
 kubectl delete secret olympic-tracker-registry
 ```
 
@@ -400,10 +424,12 @@ kubectl delete secret olympic-tracker-registry
 
 | Symptom | Likely cause | Look at |
 |---|---|---|
-| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, Secret missing or token expired | `kubectl describe pod -l app=olympic-games-app` (Events) |
+| `helm install` fails: `cannot re-use a name that is still in use` | the release already exists | `helm list`; `helm uninstall olympic-tracker` first |
+| `helm template` or `lint` fails | template syntax, indentation | the line given in the error |
+| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, Secret missing or token expired | `kubectl describe pod -l app=olympic-tracker` (Events) |
 | `Running` but `0/1` | readiness probe failing | `kubectl describe pod`, `kubectl logs` |
 | page does not load, Pod `1/1` | Service selector does not match the Pod labels (no endpoints) | `kubectl get endpointslices`, `kubectl get pods --show-labels` |
 
 With a fixed tag the node keeps the image and does not pull it again, so the pull secret is not used. To test it, remove the image from the node first: `minikube image rm registry.gitlab.com/younesyousfipro-group/olympic-tracker:0.1.4`.
 
-Design choices are recorded in [docs/decisions.md](docs/decisions.md#kubernetes-manifests-2026-11-02).
+Design choices are recorded in [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04). The chart replaces the plain manifests of the `k8s/` folder (removed, see the decisions).
