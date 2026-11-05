@@ -1,0 +1,11 @@
+# Overrides for the staging namespace; everything else comes from values.yaml.
+# No tag: the image is appVersion, the latest release
+app:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 128Mi

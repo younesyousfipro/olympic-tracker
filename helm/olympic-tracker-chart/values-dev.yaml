@@ -1,0 +1,5 @@
+# Overrides for the dev namespace; everything else comes from values.yaml
+app:
+  # Latest build of main (moving tag)
+  tag: main
+  imagePullPolicy: Always
