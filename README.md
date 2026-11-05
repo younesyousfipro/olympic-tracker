@@ -329,12 +329,13 @@ semantic-release recommends keeping the version in git tags only and not committ
 
 ## Deploy with Helm (Minikube)
 
-The chart [`helm/olympic-tracker-chart/`](helm/olympic-tracker-chart/) deploys the released image from the registry: a Deployment (1 Pod) and a `LoadBalancer` Service. Tested with Helm 4.3, Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
+The chart [`helm/olympic-tracker-chart/`](helm/olympic-tracker-chart/) deploys the image from the registry into two environments, `dev` and `staging`, each in its own namespace: a Deployment and a `LoadBalancer` Service. Tested with Helm 4.3, Minikube 1.35 (Kubernetes 1.32, Docker driver) on an Apple Silicon Mac: the `linux/amd64` image runs with Docker Desktop's emulation.
 
 | File | Content |
 |---|---|
 | `Chart.yaml` | chart name, chart `version` (bumped by hand when the chart changes), `appVersion` (the default image tag, written by `set-version.sh` at each release) |
-| `values.yaml` | default values, all under `app:` |
+| `values.yaml` | every value with its default, all under `app:` |
+| `values-dev.yaml`, `values-staging.yaml` | only the values that differ in that environment |
 | `templates/` | `deployment.yaml`, `service.yaml` |
 
 Values:
@@ -344,6 +345,7 @@ Values:
 | `app.replicas` | `1` | Deployment `replicas` |
 | `app.image` | `registry.gitlab.com/younesyousfipro-group/olympic-tracker` | image name, without tag |
 | `app.tag` | `""` | image tag; empty = `appVersion` from `Chart.yaml` |
+| `app.imagePullPolicy` | `IfNotPresent` | `Always` for a moving tag (`main`), otherwise the node keeps the first image it pulled |
 | `app.port` | `8080` | `containerPort`, readiness probe and Service `targetPort` (nginx runs as non-root) |
 | `app.imagePullSecret` | `olympic-tracker-registry` | pull secret name; empty = no `imagePullSecrets` |
 | `app.resources` | requests `50m` / `32Mi`, limits `200m` / `64Mi` | container `resources` |
@@ -362,22 +364,50 @@ Differences between the two projects:
 | Readiness probe | `GET /` | API: `GET /api/notions`; database: `pg_isready` |
 | State | stateless: deleting the Pod loses nothing | PVC: data survives the Pod; `strategy: Recreate` |
 | Start order | — | none: the API restarts until the database is ready |
-| Uninstall | nothing lost | also deletes the PVC, so the data |
+| `helm uninstall` | nothing lost | PVC kept, so the data; deleting it is a separate command |
 
-### 1. Registry credentials (once per cluster and namespace)
+### Environments
 
-The project is public, so the image can be pulled anonymously; the chart still uses a pull secret, as a private registry would require.
+One chart, one image, two namespaces. The image carries no environment: only the values change.
+
+| | dev | staging |
+|---|---|---|
+| Namespace | `dev` | `staging` |
+| Values file | `values-dev.yaml` | `values-staging.yaml` |
+| Image tag | `main`: latest build of `main` | none, so `appVersion`: latest release (`0.1.4`) |
+| `imagePullPolicy` | `Always` (moving tag) | `IfNotPresent` (default) |
+| Replicas | 1 (default) | 2 |
+| Resources | requests `50m` / `32Mi`, limits `200m` / `64Mi` (default) | requests `100m` / `64Mi`, limits `300m` / `128Mi` |
+| Pull secret | `olympic-tracker-registry` in `dev` | `olympic-tracker-registry` in `staging` |
+
+There is no branch per environment: `main` is the only long-lived branch. An image is promoted, not rebuilt for each environment: `dev` shows the latest merge on `main`, `staging` the latest release. Deployments are run by hand (no deploy job in the pipeline: GitLab.com runners cannot reach Minikube).
+
+Measured idle with `kubectl top` (metrics-server addon): `1m` CPU and `7Mi` memory per Pod.
+
+The commands below use a shell variable for the chart path, and `<env>` for `dev` or `staging`:
+
+```bash
+C=helm/olympic-tracker-chart
+```
+
+### 1. Namespaces and registry credentials (once per cluster)
+
+The project is public, so the image can be pulled anonymously; the chart still uses a pull secret, as a private registry would require. A Pod only reads Secrets of its own namespace: one Secret per namespace.
 
 1. On GitLab: *Settings → Repository → Deploy tokens → Add token*, scope **`read_registry`** only, with an expiration date. Keep the username and token (shown once) in a password manager.
-2. Create the Secret (the token is typed without echo and stays out of the shell history):
+2. Create the namespaces, then the Secret in each of them (the token is typed without echo and stays out of the shell history):
 
    ```bash
    kubectl config current-context      # must be minikube
+   kubectl create namespace dev
+   kubectl create namespace staging
    read -rs TOKEN
-   kubectl create secret docker-registry olympic-tracker-registry \
-     --docker-server=registry.gitlab.com \
-     --docker-username=<deploy token username> \
-     --docker-password="$TOKEN"
+   for ns in dev staging; do
+     kubectl create secret docker-registry olympic-tracker-registry -n "$ns" \
+       --docker-server=registry.gitlab.com \
+       --docker-username=<deploy token username> \
+       --docker-password="$TOKEN"
+   done
    unset TOKEN
    ```
 
@@ -386,10 +416,10 @@ The kubelet (not the container) uses this Secret to pull the image. When the tok
 ### 2. Check the chart
 
 ```bash
-helm lint --strict helm/olympic-tracker-chart
-helm template olympic-tracker helm/olympic-tracker-chart          # rendered YAML, no cluster needed
+helm lint --strict $C -f $C/values-<env>.yaml
+diff <(helm template olympic-tracker $C) <(helm template olympic-tracker $C -f $C/values-<env>.yaml)   # only the overrides
 minikube start
-helm install olympic-tracker helm/olympic-tracker-chart --dry-run=server   # validated by the API server, nothing created
+helm install olympic-tracker $C -n <env> -f $C/values-<env>.yaml --dry-run=server   # validated by the API server, nothing created
 ```
 
 `lint` checks the chart structure and the template syntax, not the Kubernetes fields: the server dry run does.
@@ -397,39 +427,52 @@ helm install olympic-tracker helm/olympic-tracker-chart --dry-run=server   # val
 ### 3. Install and check
 
 ```bash
-helm install olympic-tracker helm/olympic-tracker-chart
-helm list                              # olympic-tracker, deployed, app version 0.1.4
-kubectl get pods                       # 1/1 Running
-kubectl get endpointslices -l kubernetes.io/service-name=olympic-tracker-service   # the Pod IP, port 8080
+helm install olympic-tracker $C -n dev -f $C/values-dev.yaml
+helm install olympic-tracker $C -n staging -f $C/values-staging.yaml
+helm list -A                                                 # one olympic-tracker release per namespace
+kubectl get pods -n <env>                                    # dev: 1 Pod, staging: 2, all 1/1 Running
+kubectl describe pods -n <env> | grep -E "Image:|Pulled"     # dev: :main, staging: :0.1.4
+kubectl get endpointslices -n <env> -l kubernetes.io/service-name=olympic-tracker-service   # one IP per Pod, port 8080
 ```
 
-Helm records each release revision in a Secret of the namespace (`sh.helm.release.v1.olympic-tracker.v1`).
+Same release name in both namespaces: the objects have the same names, only the namespace differs. Helm records each release revision in a Secret of the namespace (`sh.helm.release.v1.olympic-tracker.v1`).
 
 ### 4. Open the application
 
 ```bash
-minikube service olympic-tracker-service --url
+minikube service olympic-tracker-service -n <env> --url
 ```
 
-The command prints `http://127.0.0.1:<port>` and must stay open: with the Docker driver on macOS, the node IP is not reachable and this command holds a tunnel to the Service.
+The command prints `http://127.0.0.1:<port>` (a new local port each time) and must stay open: with the Docker driver on macOS, the node IP is not reachable and this command holds a tunnel to the Service. `kubectl port-forward -n <env> svc/olympic-tracker-service 8082:80` gives a fixed port, but talks to a single Pod and bypasses the Service: debugging only.
 
-### 5. Remove
+### 5. Update
+
+| Change | Command |
+|---|---|
+| new build of `main`, to `dev` | `kubectl rollout restart deployment olympic-tracker-deployment -n dev` (same values, so `helm upgrade` would not replace the Pods; the new Pods pull `:main` again) |
+| new release, to `staging` | `git pull` (the release commit updates `appVersion`), then `helm upgrade olympic-tracker $C -n staging -f $C/values-staging.yaml` |
+| chart or values changed | `helm upgrade olympic-tracker $C -n <env> -f $C/values-<env>.yaml` |
+
+### 6. Remove
 
 ```bash
-helm uninstall olympic-tracker
-kubectl delete secret olympic-tracker-registry
+helm uninstall olympic-tracker -n <env>
+kubectl delete secret olympic-tracker-registry -n <env>
+kubectl delete namespace <env>          # or only this, which deletes everything in it
 ```
 
 ### Troubleshooting
 
 | Symptom | Likely cause | Look at |
 |---|---|---|
-| `helm install` fails: `cannot re-use a name that is still in use` | the release already exists | `helm list`; `helm uninstall olympic-tracker` first |
+| `helm install` fails: `cannot re-use a name that is still in use` | the release already exists in this namespace | `helm list -n <env>`; `helm uninstall olympic-tracker -n <env>` first |
+| Service `olympic-tracker-service` not found | release installed under another name (objects are named after it), or wrong namespace | `helm list -A`, `kubectl get svc -n <env>` |
 | `helm template` or `lint` fails | template syntax, indentation | the line given in the error |
-| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, Secret missing or token expired | `kubectl describe pod -l app=olympic-tracker` (Events) |
-| `Running` but `0/1` | readiness probe failing | `kubectl describe pod`, `kubectl logs` |
-| page does not load, Pod `1/1` | Service selector does not match the Pod labels (no endpoints) | `kubectl get endpointslices`, `kubectl get pods --show-labels` |
+| `ErrImagePull` / `ImagePullBackOff` | wrong image name or tag, Secret missing in this namespace or token expired | `kubectl describe pod -n <env> -l app=olympic-tracker` (Events) |
+| `Running` but `0/1` | readiness probe failing | `kubectl describe pod -n <env>`, `kubectl logs -n <env>` |
+| page does not load, Pods `1/1` | Service selector does not match the Pod labels (no endpoints) | `kubectl get endpointslices -n <env>`, `kubectl get pods -n <env> --show-labels` |
+| `dev` still runs an old `main` | Pods not restarted since the last build | `kubectl rollout restart deployment olympic-tracker-deployment -n dev` |
 
-With a fixed tag the node keeps the image and does not pull it again, so the pull secret is not used. To test it, remove the image from the node first: `minikube image rm registry.gitlab.com/younesyousfipro-group/olympic-tracker:0.1.4`.
+With a fixed tag (`staging`) the node keeps the image and does not pull it again (`already present on machine`), so the pull secret is not used. To test it, remove the image from the node first: `minikube image rm registry.gitlab.com/younesyousfipro-group/olympic-tracker:0.1.4`.
 
-Design choices are recorded in [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04). The chart replaces the plain manifests of the `k8s/` folder (removed, see the decisions).
+Design choices are recorded in [docs/decisions.md](docs/decisions.md#helm-chart-2026-11-04) and [docs/decisions.md](docs/decisions.md#environments-2026-11-05). The chart replaces the plain manifests of the `k8s/` folder (removed, see the decisions).

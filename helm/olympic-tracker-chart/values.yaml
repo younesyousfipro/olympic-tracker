@@ -3,6 +3,8 @@ app:
   image: registry.gitlab.com/younesyousfipro-group/olympic-tracker
   # Empty = appVersion from Chart.yaml
   tag: ""
+  # Always for a moving tag (main): IfNotPresent would keep the first image pulled
+  imagePullPolicy: IfNotPresent
   # nginx listens on 8080 since the non-root image
   port: 8080
   # Created with kubectl in each namespace; empty = no imagePullSecrets block
